@@ -7,9 +7,13 @@ on:
     paths:
       - ".github/workflows/build-native.yml"
       - "package.json"
+      - "package-lock.json"
       - "main.js"
       - "preload.js"
       - "index.html"
+
+permissions:
+  contents: read
 
 jobs:
   build-native:
@@ -17,6 +21,7 @@ jobs:
 
     env:
       GYP_MSVS_VERSION: "2022"
+      npm_config_msvs_version: "2022"
 
     steps:
       - name: Checkout repository
@@ -37,8 +42,9 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          npm config set msvs_version 2022
-          npm config set python "${env:pythonLocation}\python.exe"
+          $python = (Get-Command python -ErrorAction Stop).Source
+          "npm_config_python=$python" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "npm_config_msvs_version=2022" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
           Write-Host "Node version:"
           node --version
@@ -47,22 +53,23 @@ jobs:
           npm --version
 
           Write-Host "Python version:"
-          python --version
+          & $python --version
 
-          Write-Host "Visual Studio folders:"
+          Write-Host "Python executable: $python"
+
+          Write-Host "Visual Studio installations:"
           Get-ChildItem `
             "C:\Program Files\Microsoft Visual Studio\2022" `
             -Directory `
             -ErrorAction SilentlyContinue
 
-      - name: Install dependencies
+      - name: Install dependencies without native install scripts
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          npm install --ignore-scripts --no-audit --no-fund
 
-          npm install --no-audit --no-fund
-
-      - name: Rebuild naudiodon for Electron
+      - name: Rebuild naudiodon for the installed Electron version
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -80,9 +87,8 @@ jobs:
             $env:GITHUB_WORKSPACE `
             "node_modules\naudiodon\build\Release\naudiodon.node"
 
-          if (!(Test-Path -LiteralPath $nativeModule)) {
-            Write-Error "naudiodon.node was not created: $nativeModule"
-            exit 1
+          if (!(Test-Path -LiteralPath $nativeModule -PathType Leaf)) {
+            throw "naudiodon.node was not created: $nativeModule"
           }
 
           Write-Host "Native module found:"
@@ -92,7 +98,6 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-
           npx electron --version
 
       - name: Verify naudiodon loads in Electron
@@ -105,11 +110,10 @@ jobs:
 
           console.log('naudiodon loaded successfully');
           console.log(Object.keys(naudiodon));
-          '@ | Set-Content -Path verify-naudiodon.js -Encoding UTF8
+          '@ | Set-Content -Path verify-naudiodon.cjs -Encoding utf8
 
-          npx electron verify-naudiodon.js
-
-          Remove-Item verify-naudiodon.js -Force
+          npx electron verify-naudiodon.cjs
+          Remove-Item verify-naudiodon.cjs -Force
 
       - name: Upload native module
         uses: actions/upload-artifact@v4
