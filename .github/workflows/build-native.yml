@@ -1,0 +1,49 @@
+name: Build naudiodon for Electron (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-native.yml'
+      - 'package.json'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Read Electron version from package.json
+        id: electron_version
+        shell: bash
+        run: |
+          VER=$(node -p "require('./package.json').devDependencies.electron.replace('^','')")
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Electron version: $VER"
+
+      - name: Install dependencies (skip scripts)
+        run: npm install --ignore-scripts
+
+      - name: Install naudiodon and rebuild for Electron
+        shell: cmd
+        run: |
+          npm install naudiodon@2.3.6 --ignore-scripts
+          npx node-gyp rebuild --target=${{ steps.electron_version.outputs.version }} --arch=x64 --dist-url=https://electronjs.org/headers --directory=node_modules\naudiodon
+
+      - name: Locate built .node file
+        shell: bash
+        run: |
+          find node_modules/naudiodon -name "*.node" -print
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: naudiodon-electron28-win-x64
+          path: node_modules/naudiodon/build/Release/*.node
+          if-no-files-found: error
