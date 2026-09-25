@@ -15,15 +15,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund
 
       - name: Rebuild naudiodon for Electron
-        run: npx electron-rebuild -f -w naudiodon
+        run: npx --yes @electron/rebuild@3.7.1 -f -w naudiodon
 
-      - name: Verify native module
+      - name: Verify native module exists
         shell: pwsh
         run: |
           $path = "node_modules/naudiodon/build/Release/naudiodon.node"
@@ -33,10 +32,15 @@ jobs:
             exit 1
           }
 
-          Write-Host "SUCCESS: $path"
+          Write-Host "Native module found:"
           Get-Item $path
 
-      - name: Upload naudiodon binary
+      - name: Verify naudiodon loads in Electron
+        shell: pwsh
+        run: |
+          npx electron -e "const ad = require('./node_modules/naudiodon'); console.log('naudiodon loaded successfully'); console.log(Object.keys(ad));"
+
+      - name: Upload native module
         uses: actions/upload-artifact@v4
         with:
           name: aura-naudiodon-win32-x64-electron28
