@@ -2,6 +2,7 @@ name: Build AURA Native Module
 
 on:
   workflow_dispatch:
+
   push:
     paths:
       - ".github/workflows/build-native.yml"
@@ -12,8 +13,6 @@ on:
 
 jobs:
   build-native:
-    # windows-latest currently resolves to a runner with Visual Studio 18.
-    # node-gyp 10 does not reliably detect that installation yet.
     runs-on: windows-2022
 
     env:
@@ -27,7 +26,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
 
       - name: Setup Python for node-gyp
         uses: actions/setup-python@v5
@@ -52,12 +50,16 @@ jobs:
           python --version
 
           Write-Host "Visual Studio folders:"
-          Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022" -Directory -ErrorAction SilentlyContinue
+          Get-ChildItem `
+            "C:\Program Files\Microsoft Visual Studio\2022" `
+            -Directory `
+            -ErrorAction SilentlyContinue
 
       - name: Install dependencies
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+
           npm install --no-audit --no-fund
 
       - name: Rebuild naudiodon for Electron
@@ -74,7 +76,9 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $nativeModule = Join-Path $env:GITHUB_WORKSPACE "node_modules\naudiodon\build\Release\naudiodon.node"
+          $nativeModule = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "node_modules\naudiodon\build\Release\naudiodon.node"
 
           if (!(Test-Path -LiteralPath $nativeModule)) {
             Write-Error "naudiodon.node was not created: $nativeModule"
@@ -88,6 +92,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+
           npx electron --version
 
       - name: Verify naudiodon loads in Electron
@@ -95,11 +100,16 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          npx electron -e @"
+          @'
           const naudiodon = require('./node_modules/naudiodon');
+
           console.log('naudiodon loaded successfully');
           console.log(Object.keys(naudiodon));
-          "@
+          '@ | Set-Content -Path verify-naudiodon.js -Encoding UTF8
+
+          npx electron verify-naudiodon.js
+
+          Remove-Item verify-naudiodon.js -Force
 
       - name: Upload native module
         uses: actions/upload-artifact@v4
@@ -107,4 +117,3 @@ jobs:
           name: aura-naudiodon-win32-x64-electron28
           path: node_modules/naudiodon/build/Release/naudiodon.node
           if-no-files-found: error
-          
