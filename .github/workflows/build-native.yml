@@ -15,9 +15,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: build-native-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-native:
+    name: Build naudiodon for Electron
     runs-on: windows-2022
+    timeout-minutes: 30
 
     env:
       GYP_MSVS_VERSION: "2022"
@@ -43,8 +49,12 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           $python = (Get-Command python -ErrorAction Stop).Source
-          "npm_config_python=$python" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "npm_config_msvs_version=2022" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          "npm_config_python=$python" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          "npm_config_msvs_version=2022" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
           Write-Host "Node version:"
           node --version
@@ -55,7 +65,8 @@ jobs:
           Write-Host "Python version:"
           & $python --version
 
-          Write-Host "Python executable: $python"
+          Write-Host "Python executable:"
+          Write-Host $python
 
           Write-Host "Visual Studio installations:"
           Get-ChildItem `
@@ -67,16 +78,82 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          npm install --ignore-scripts --no-audit --no-fund
 
-      - name: Rebuild naudiodon for the installed Electron version
+          npm install `
+            --ignore-scripts `
+            --no-audit `
+            --no-fund
+
+      - name: Verify Electron package exists
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $electronPackage = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "node_modules\electron\package.json"
+
+          if (!(Test-Path -LiteralPath $electronPackage -PathType Leaf)) {
+            throw "Electron package was not installed: $electronPackage"
+          }
+
+          $electronVersion = node -p "require('./node_modules/electron/package.json').version"
+
+          if ([string]::IsNullOrWhiteSpace($electronVersion)) {
+            throw "Electron package version could not be detected"
+          }
+
+          Write-Host "Electron package version: $electronVersion"
+
+      - name: Download Electron binary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $electronInstallScript = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "node_modules\electron\install.js"
+
+          if (!(Test-Path -LiteralPath $electronInstallScript -PathType Leaf)) {
+            throw "Electron install script was not found: $electronInstallScript"
+          }
+
+          Write-Host "Downloading Electron binary..."
+          node $electronInstallScript
+
+          $electronBinary = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "node_modules\electron\dist\electron.exe"
+
+          if (!(Test-Path -LiteralPath $electronBinary -PathType Leaf)) {
+            throw "Electron binary was not downloaded: $electronBinary"
+          }
+
+          Write-Host "Electron binary found:"
+          Get-Item -LiteralPath $electronBinary
+
+      - name: Verify Electron version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $electronVersion = npx --no-install electron --version
+
+          if ([string]::IsNullOrWhiteSpace($electronVersion)) {
+            throw "Electron did not return a version"
+          }
+
+          Write-Host "Electron runtime version: $electronVersion"
+
+      - name: Rebuild naudiodon for Electron 28
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
           npx --yes @electron/rebuild@3.7.1 `
             --force `
-            --which-module naudiodon
+            --which-module naudiodon `
+            --version 28.3.3
 
       - name: Verify native module exists
         shell: pwsh
@@ -88,32 +165,46 @@ jobs:
             "node_modules\naudiodon\build\Release\naudiodon.node"
 
           if (!(Test-Path -LiteralPath $nativeModule -PathType Leaf)) {
+            Write-Host "naudiodon directory contents:"
+            Get-ChildItem `
+              (Join-Path $env:GITHUB_WORKSPACE "node_modules\naudiodon") `
+              -Recurse `
+              -ErrorAction SilentlyContinue
+
             throw "naudiodon.node was not created: $nativeModule"
           }
 
           Write-Host "Native module found:"
           Get-Item -LiteralPath $nativeModule
 
-      - name: Verify Electron version
+      - name: Verify naudiodon inside Electron
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          npx electron --version
 
-      - name: Verify naudiodon loads in Electron
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
+          $verifyScript = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "verify-naudiodon.cjs"
 
           @'
+          const electronVersion = process.versions.electron;
           const naudiodon = require('./node_modules/naudiodon');
 
+          if (!electronVersion) {
+            throw new Error('This script was not executed by Electron');
+          }
+
+          console.log(`Electron runtime: ${electronVersion}`);
           console.log('naudiodon loaded successfully');
           console.log(Object.keys(naudiodon));
-          '@ | Set-Content -Path verify-naudiodon.cjs -Encoding utf8
+          '@ | Set-Content -LiteralPath $verifyScript -Encoding utf8
 
-          npx electron verify-naudiodon.cjs
-          Remove-Item verify-naudiodon.cjs -Force
+          npx --no-install electron $verifyScript
+
+          Remove-Item `
+            -LiteralPath $verifyScript `
+            -Force `
+            -ErrorAction SilentlyContinue
 
       - name: Upload native module
         uses: actions/upload-artifact@v4
