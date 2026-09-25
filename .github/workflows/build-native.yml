@@ -2,43 +2,104 @@ name: Build AURA Native Module
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-native.yml"
+      - "package.json"
+      - "main.js"
+      - "preload.js"
+      - "index.html"
 
 jobs:
   build-native:
-    runs-on: windows-latest
+    # windows-latest currently resolves to a runner with Visual Studio 18.
+    # node-gyp 10 does not reliably detect that installation yet.
+    runs-on: windows-2022
+
+    env:
+      GYP_MSVS_VERSION: "2022"
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20"
+          cache: npm
+
+      - name: Setup Python for node-gyp
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configure native build toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          npm config set msvs_version 2022
+          npm config set python "${env:pythonLocation}\python.exe"
+
+          Write-Host "Node version:"
+          node --version
+
+          Write-Host "npm version:"
+          npm --version
+
+          Write-Host "Python version:"
+          python --version
+
+          Write-Host "Visual Studio folders:"
+          Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022" -Directory -ErrorAction SilentlyContinue
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          npm install --no-audit --no-fund
 
       - name: Rebuild naudiodon for Electron
-        run: npx --yes @electron/rebuild@3.7.1 -f -w naudiodon
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          npx --yes @electron/rebuild@3.7.1 `
+            --force `
+            --which-module naudiodon
 
       - name: Verify native module exists
         shell: pwsh
         run: |
-          $path = "node_modules/naudiodon/build/Release/naudiodon.node"
+          $ErrorActionPreference = "Stop"
 
-          if (!(Test-Path $path)) {
-            Write-Error "naudiodon.node was not created!"
+          $nativeModule = Join-Path $env:GITHUB_WORKSPACE "node_modules\naudiodon\build\Release\naudiodon.node"
+
+          if (!(Test-Path -LiteralPath $nativeModule)) {
+            Write-Error "naudiodon.node was not created: $nativeModule"
             exit 1
           }
 
           Write-Host "Native module found:"
-          Get-Item $path
+          Get-Item -LiteralPath $nativeModule
+
+      - name: Verify Electron version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          npx electron --version
 
       - name: Verify naudiodon loads in Electron
         shell: pwsh
         run: |
-          npx electron -e "const ad = require('./node_modules/naudiodon'); console.log('naudiodon loaded successfully'); console.log(Object.keys(ad));"
+          $ErrorActionPreference = "Stop"
+
+          npx electron -e @"
+          const naudiodon = require('./node_modules/naudiodon');
+          console.log('naudiodon loaded successfully');
+          console.log(Object.keys(naudiodon));
+          "@
 
       - name: Upload native module
         uses: actions/upload-artifact@v4
@@ -46,3 +107,4 @@ jobs:
           name: aura-naudiodon-win32-x64-electron28
           path: node_modules/naudiodon/build/Release/naudiodon.node
           if-no-files-found: error
+          
