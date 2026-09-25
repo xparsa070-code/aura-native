@@ -9,7 +9,8 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -27,7 +28,7 @@ jobs:
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "Electron version: $VER"
 
-      - name: Install dependencies (skip scripts)
+      - name: Install dependencies
         run: npm install --ignore-scripts
 
       - name: Build naudiodon for Electron
@@ -39,6 +40,8 @@ jobs:
           npm_config_disturl: https://electronjs.org/headers
           npm_config_runtime: electron
           npm_config_build_from_source: "true"
+          npm_config_msvs_version: "2022"
+          GYP_MSVS_VERSION: "2022"
         run: npm rebuild naudiodon --build-from-source --verbose
 
       - name: Locate built .node file
@@ -51,3 +54,4 @@ jobs:
           name: naudiodon-electron28-win-x64
           path: node_modules/naudiodon/build/Release/*.node
           if-no-files-found: error
+          
