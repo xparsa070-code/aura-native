@@ -30,16 +30,20 @@ jobs:
       - name: Install dependencies (skip scripts)
         run: npm install --ignore-scripts
 
-      - name: Install naudiodon and rebuild for Electron
+      - name: Build naudiodon for Electron
         shell: cmd
-        run: |
-          npm install naudiodon@2.3.6 --ignore-scripts
-          npx node-gyp rebuild --target=${{ steps.electron_version.outputs.version }} --arch=x64 --dist-url=https://electronjs.org/headers --directory=node_modules\naudiodon
+        env:
+          npm_config_target: ${{ steps.electron_version.outputs.version }}
+          npm_config_arch: x64
+          npm_config_target_arch: x64
+          npm_config_disturl: https://electronjs.org/headers
+          npm_config_runtime: electron
+          npm_config_build_from_source: "true"
+        run: npm rebuild naudiodon --build-from-source --verbose
 
       - name: Locate built .node file
         shell: bash
-        run: |
-          find node_modules/naudiodon -name "*.node" -print
+        run: find node_modules/naudiodon -name "*.node" -print
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
