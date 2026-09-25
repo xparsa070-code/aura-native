@@ -2,341 +2,172 @@ name: Build AURA Native Module
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "package.json"
+      - ".github/workflows/build-native.yml"
+      - "main.js"
+      - "preload.js"
+      - "index.html"
+  pull_request:
+    paths:
+      - "package.json"
+      - ".github/workflows/build-native.yml"
+      - "main.js"
+      - "preload.js"
+      - "index.html"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ELECTRON_VERSION: "28.0.0"
+  npm_config_arch: x64
+  npm_config_platform: win32
 
 jobs:
   build-native:
     name: Build naudiodon for AURA / Electron
     runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
-      # ============================================================
-      # 1. Checkout
-      # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ============================================================
-      # 2. Setup Node
-      #
-      # The exact Electron version comes from package-lock.json.
-      # Node 20 is used only as the build host; the native addon is
-      # rebuilt specifically for Electron later.
-      # ============================================================
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: package-lock.json
 
-      # ============================================================
-      # 3. Verify repository files
-      # ============================================================
-      - name: Verify package files
-        shell: pwsh
-        run: |
-          if (!(Test-Path "package.json")) {
-            Write-Error "package.json not found."
-            exit 1
-          }
-
-          if (!(Test-Path "package-lock.json")) {
-            Write-Error "package-lock.json not found."
-            exit 1
-          }
-
-          Write-Host "package.json and package-lock.json found."
-
-      # ============================================================
-      # 4. Show environment
-      # ============================================================
-      - name: Show build environment
-        shell: pwsh
-        run: |
-          Write-Host "=== OS ==="
-          [System.Environment]::OSVersion
-
-          Write-Host "=== Node ==="
-          node --version
-
-          Write-Host "=== npm ==="
-          npm --version
-
-          Write-Host "=== Node platform ==="
-          node -p "process.platform"
-
-          Write-Host "=== Node architecture ==="
-          node -p "process.arch"
-
-      # ============================================================
-      # 5. Verify this is Windows x64
-      # ============================================================
       - name: Verify Windows x64 environment
         shell: pwsh
         run: |
+          if (!(Test-Path "package.json")) {
+            throw "package.json not found."
+          }
+
           $platform = node -p "process.platform"
           $arch = node -p "process.arch"
 
+          Write-Host "Node: $(node --version)"
+          Write-Host "npm: $(npm --version)"
+          Write-Host "Platform: $platform"
+          Write-Host "Architecture: $arch"
+
           if ($platform -ne "win32") {
-            Write-Error "Expected Windows, got: $platform"
-            exit 1
+            throw "Expected Windows, got $platform"
           }
 
           if ($arch -ne "x64") {
-            Write-Error "Expected x64, got: $arch"
-            exit 1
+            throw "Expected x64, got $arch"
           }
 
-          Write-Host "Windows x64 confirmed."
-
-      # ============================================================
-      # 6. Install dependencies exactly from package-lock.json
-      # ============================================================
       - name: Install dependencies
         shell: pwsh
-        env:
-          npm_config_arch: x64
-          npm_config_platform: win32
         run: |
-          npm ci --no-audit --no-fund
+          npm install --no-audit --no-fund --prefer-online
 
-      # ============================================================
-      # 7. Read the ACTUAL installed versions
-      # ============================================================
-      - name: Detect actual dependency versions
-        shell: pwsh
-        run: |
-          $electronVersion = node -p "require('./node_modules/electron/package.json').version"
-          $naudiodonVersion = node -p "require('./node_modules/naudiodon/package.json').version"
-
-          Write-Host "Electron: $electronVersion"
-          Write-Host "naudiodon: $naudiodonVersion"
-
-          "ELECTRON_VERSION=$electronVersion" >> $env:GITHUB_ENV
-          "NAUDIODON_VERSION=$naudiodonVersion" >> $env:GITHUB_ENV
-
-      # ============================================================
-      # 8. Confirm expected packages are installed
-      # ============================================================
-      - name: Verify installed packages
+      - name: Verify installed dependencies
         shell: pwsh
         run: |
           npm list electron --depth=0
           npm list naudiodon --depth=0
 
-      # ============================================================
-      # 9. Check whether naudiodon exists before rebuild
-      # ============================================================
-      - name: Inspect naudiodon before rebuild
-        shell: pwsh
-        run: |
-          Write-Host "naudiodon directory:"
-
-          if (Test-Path "node_modules/naudiodon") {
-            Get-ChildItem "node_modules/naudiodon" -Force
-          }
-          else {
-            Write-Error "naudiodon package was not installed."
-            exit 1
+          if (!(Test-Path "node_modules/electron")) {
+            throw "Electron was not installed."
           }
 
-      # ============================================================
-      # 10. Rebuild naudiodon specifically against Electron
-      #
-      # electron-rebuild detects the installed Electron version
-      # instead of us hard-coding an ABI/version.
-      # ============================================================
+          if (!(Test-Path "node_modules/naudiodon")) {
+            throw "naudiodon was not installed."
+          }
+
+          $electron = node -p "require('./node_modules/electron/package.json').version"
+          $naudiodon = node -p "require('./node_modules/naudiodon/package.json').version"
+
+          "ELECTRON_VERSION=$electron" >> $env:GITHUB_ENV
+          "NAUDIODON_VERSION=$naudiodon" >> $env:GITHUB_ENV
+
+          Write-Host "Electron: $electron"
+          Write-Host "naudiodon: $naudiodon"
+
       - name: Rebuild naudiodon for Electron
         shell: pwsh
-        env:
-          npm_config_arch: x64
-          npm_config_platform: win32
         run: |
-          npx --yes @electron/rebuild@3.7.1 `
-            --force `
-            --which-module=naudiodon
+          npx --yes @electron/rebuild@3.7.1 --force --which-module=naudiodon
 
-      # ============================================================
-      # 11. Verify native binary exists
-      # ============================================================
       - name: Verify native binary
         shell: pwsh
         run: |
           $native = "node_modules/naudiodon/build/Release/naudiodon.node"
 
           if (!(Test-Path $native)) {
-            Write-Error "naudiodon.node was not created."
-            exit 1
+            throw "Native binary was not created: $native"
           }
 
           $file = Get-Item $native
-
-          Write-Host "Native binary:"
-          Write-Host $file.FullName
+          Write-Host "Native binary: $($file.FullName)"
           Write-Host "Size: $($file.Length) bytes"
 
           if ($file.Length -lt 10000) {
-            Write-Error "Native binary is suspiciously small."
-            exit 1
+            throw "Native binary is suspiciously small."
           }
 
-      # ============================================================
-      # 12. Verify PE architecture = x64
-      #
-      # PE Machine value:
-      # 0x8664 = AMD64 / x64
-      # ============================================================
-      - name: Verify native binary architecture
-        shell: pwsh
-        run: |
-          $path = (Resolve-Path "node_modules/naudiodon/build/Release/naudiodon.node").Path
-
-          $bytes = [System.IO.File]::ReadAllBytes($path)
+          $bytes = [IO.File]::ReadAllBytes($native)
 
           if ($bytes.Length -lt 64) {
-            Write-Error "Invalid PE file."
-            exit 1
+            throw "Invalid PE file."
           }
 
           $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
 
-          if ($peOffset -lt 0 -or ($peOffset + 6) -gt $bytes.Length) {
-            Write-Error "Invalid PE header."
-            exit 1
+          if ($peOffset -lt 0 -or $peOffset + 6 -gt $bytes.Length) {
+            throw "Invalid PE header."
           }
 
-          $signature = [System.Text.Encoding]::ASCII.GetString(
-            $bytes,
-            $peOffset,
-            4
-          )
+          $signature = [Text.Encoding]::ASCII.GetString($bytes, $peOffset, 4)
 
           if ($signature -ne "PE`0`0") {
-            Write-Error "Not a valid PE executable/module."
-            exit 1
+            throw "Native module is not a PE file."
           }
 
           $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
-
           Write-Host ("PE Machine: 0x{0:X4}" -f $machine)
 
           if ($machine -ne 0x8664) {
-            Write-Error "Native module is not x64."
-            exit 1
+            throw "Native module is not x64."
           }
 
-          Write-Host "Native module architecture confirmed: x64."
-
-      # ============================================================
-      # 13. Create Electron-native validation script
-      # ============================================================
-      - name: Create Electron native test
+      - name: Create Electron validation script
         shell: pwsh
         run: |
           @'
-          console.log("======================================");
-          console.log(" AURA Native / Electron Validation");
-          console.log("======================================");
+          const naudiodon = require('naudiodon');
+          if (process.platform !== 'win32') throw new Error('Not Windows');
+          if (process.arch !== 'x64') throw new Error('Not x64');
 
-          console.log("Platform:", process.platform);
-          console.log("Architecture:", process.arch);
-          console.log("Electron:", process.versions.electron);
-          console.log("Node:", process.versions.node);
-
-          if (process.platform !== "win32") {
-            throw new Error("Electron is not running on Windows.");
+          for (const name of ['AudioIO', 'getDevices', 'SampleFormat16Bit', 'SampleFormat24Bit']) {
+            if (!(name in naudiodon)) throw new Error(`Missing naudiodon export: ${name}`);
           }
-
-          if (process.arch !== "x64") {
-            throw new Error("Electron is not running as x64.");
-          }
-
-          const naudiodon = require("naudiodon");
-
-          console.log("");
-          console.log("naudiodon loaded successfully.");
-          console.log("Exports:", Object.keys(naudiodon));
-
-          const requiredExports = [
-            "AudioIO",
-            "getDevices",
-            "SampleFormat16Bit",
-            "SampleFormat24Bit"
-          ];
-
-          for (const name of requiredExports) {
-            if (!(name in naudiodon)) {
-              throw new Error(
-                "Required naudiodon export is missing: " + name
-              );
-            }
-          }
-
-          console.log("");
-          console.log("Required exports confirmed.");
 
           const devices = naudiodon.getDevices();
+          if (!Array.isArray(devices)) throw new Error('getDevices() did not return an array');
+          if (typeof naudiodon.AudioIO !== 'function') throw new Error('AudioIO is not a function');
 
-          if (!Array.isArray(devices)) {
-            throw new Error("naudiodon.getDevices() did not return an array.");
-          }
+          console.log(`Electron ${process.versions.electron}`);
+          console.log(`Validated ${devices.length} audio device(s)`);
+          console.log('AURA native module validation PASSED');
+          '@ | Set-Content -Encoding UTF8 'verify-aura-native.cjs'
 
-          console.log("");
-          console.log("Audio device count:", devices.length);
-
-          for (const device of devices) {
-            console.log(
-              JSON.stringify({
-                id: device.id,
-                name: device.name,
-                maxInputChannels: device.maxInputChannels,
-                maxOutputChannels: device.maxOutputChannels,
-                defaultSampleRate: device.defaultSampleRate
-              })
-            );
-          }
-
-          if (typeof naudiodon.AudioIO !== "function") {
-            throw new Error("naudiodon.AudioIO is not a constructor/function.");
-          }
-
-          console.log("");
-          console.log("AudioIO API confirmed.");
-          console.log("");
-          console.log("AURA native module validation PASSED.");
-          '@ | Set-Content -Encoding UTF8 "verify-aura-native.cjs"
-
-      # ============================================================
-      # 14. Run validation THROUGH ELECTRON
-      # ============================================================
       - name: Validate naudiodon through Electron
         shell: pwsh
         run: |
-          npx electron "verify-aura-native.cjs"
+          npx electron verify-aura-native.cjs
 
-      # ============================================================
-      # 15. Inspect native Release directory
-      # ============================================================
-      - name: Inspect native runtime files
-        shell: pwsh
-        run: |
-          $release = "node_modules/naudiodon/build/Release"
-
-          if (!(Test-Path $release)) {
-            Write-Error "Native Release directory does not exist."
-            exit 1
-          }
-
-          Write-Host "=== Native Release contents ==="
-
-          Get-ChildItem $release -File -Recurse |
-            ForEach-Object {
-              Write-Host "$($_.FullName) - $($_.Length) bytes"
-            }
-
-      # ============================================================
-      # 16. Prepare clean artifact
-      # ============================================================
       - name: Prepare artifact
         shell: pwsh
         run: |
@@ -346,46 +177,19 @@ jobs:
             Remove-Item $artifact -Recurse -Force
           }
 
-          New-Item -ItemType Directory -Path $artifact | Out-Null
-          New-Item -ItemType Directory `
-            -Path "$artifact/node_modules/naudiodon" `
-            -Force | Out-Null
-
-          # Copy the complete naudiodon package so that any native
-          # runtime files required beside the .node binary are retained.
-          Copy-Item `
-            "node_modules/naudiodon/*" `
-            "$artifact/node_modules/naudiodon/" `
-            -Recurse `
-            -Force
+          New-Item -ItemType Directory -Path "$artifact/node_modules/naudiodon" -Force | Out-Null
+          Copy-Item "node_modules/naudiodon/*" "$artifact/node_modules/naudiodon/" -Recurse -Force
 
           @"
           AURA Native Build
           =================
-
           Platform: win32
           Architecture: x64
-
           Electron: $env:ELECTRON_VERSION
           naudiodon: $env:NAUDIODON_VERSION
+          Native binary: node_modules/naudiodon/build/Release/naudiodon.node
+          "@ | Set-Content -Encoding UTF8 "$artifact/BUILD-INFO.txt"
 
-          Native binary:
-          node_modules/naudiodon/build/Release/naudiodon.node
-
-          Validation:
-          - Windows x64
-          - PE x64
-          - Electron require()
-          - naudiodon.getDevices()
-          - naudiodon.AudioIO
-          - SampleFormat16Bit
-          - SampleFormat24Bit
-          "@ | Set-Content -Encoding UTF8 `
-            "$artifact/BUILD-INFO.txt"
-
-      # ============================================================
-      # 17. Upload final artifact
-      # ============================================================
       - name: Upload AURA native artifact
         uses: actions/upload-artifact@v4
         with:
@@ -394,19 +198,9 @@ jobs:
           if-no-files-found: error
           compression-level: 9
 
-      # ============================================================
-      # 18. Final summary
-      # ============================================================
       - name: Build summary
         shell: pwsh
         run: |
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host " AURA NATIVE BUILD SUCCESSFUL"
-          Write-Host "=========================================="
-          Write-Host "Electron:   $env:ELECTRON_VERSION"
-          Write-Host "naudiodon:  $env:NAUDIODON_VERSION"
-          Write-Host "Platform:   win32"
-          Write-Host "Arch:       x64"
-          Write-Host ""
-          Write-Host "Artifact: aura-native-win32-x64-electron28"
+          Write-Host "AURA native build completed successfully."
+          Write-Host "Electron: $env:ELECTRON_VERSION"
+          Write-Host "naudiodon: $env:NAUDIODON_VERSION"
