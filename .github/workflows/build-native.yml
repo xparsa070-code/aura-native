@@ -267,4 +267,3 @@ jobs:
       # getDevices() is intentionally not called in CI because
       # GitHub-hosted Windows runners have no reliable audio device.
       # Calling PortAudio/WASAPI there causes native SIGSEGV/h
-
